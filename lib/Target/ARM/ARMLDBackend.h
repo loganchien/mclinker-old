@@ -118,6 +118,9 @@ public:
   /// mergeSection - merge target dependent sections
   bool mergeSection(Module& pModule, const Input& pInput, LDSection& pSection);
 
+  /// postMergeSections - hook for target dependent post-merge action
+  void postMergeSections(Module& pModule);
+
   /// setUpReachedSectionsForGC - set the reference from section XXX to
   /// .ARM.exidx.XXX to make sure GC correctly handle section exidx
   void setUpReachedSectionsForGC(const Module& pModule,

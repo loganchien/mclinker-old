@@ -437,6 +437,10 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
   return true;
 }
 
+void ARMGNULDBackend::postMergeSections(Module& pModule)
+{
+}
+
 void ARMGNULDBackend::setUpReachedSectionsForGC(const Module& pModule,
             GarbageCollection::SectionReachedListMap& pSectReachedListMap) const
 {

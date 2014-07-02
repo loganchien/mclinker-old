@@ -191,6 +191,8 @@ bool Linker::resolve(Module& pModule)
   if (!m_pObjLinker->mergeSections())
     return false;
 
+  m_pObjLinker->postMergeSections(pModule);
+
   // 9.a - add symbols to output
   //  After all input symbols have been resolved, add them to output symbol
   //  table at once

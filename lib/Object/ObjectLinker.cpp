@@ -412,6 +412,11 @@ bool ObjectLinker::mergeSections()
   return true;
 }
 
+void ObjectLinker::postMergeSections(Module& pModule)
+{
+  m_LDBackend.postMergeSections(pModule);
+}
+
 void ObjectLinker::addSymbolToOutput(ResolveInfo& pInfo, Module& pModule)
 {
   // section symbols will be defined by linker later, we should not add section

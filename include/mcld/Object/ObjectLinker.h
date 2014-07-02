@@ -66,6 +66,9 @@ public:
   /// mergeSections - put allinput sections into output sections
   bool mergeSections();
 
+  /// postMergeSections - hook to perform post-merge action
+  void postMergeSections(Module& pModule);
+
   /// addSymbolsToOutput - after all symbols has been resolved, add the symbol
   /// to output
   void addSymbolsToOutput(Module& pModule);
