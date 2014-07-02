@@ -439,6 +439,19 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
 
 void ARMGNULDBackend::postMergeSections(Module& pModule)
 {
+  // reduce the the size of the output .ARM.extab section whenever possible
+  if (mayRewriteExtab(pModule)) {
+    rewriteExtab(pModule);
+  }
+}
+
+bool ARMGNULDBackend::mayRewriteExtab(Module& pModule)
+{
+  return false;
+}
+
+void ARMGNULDBackend::rewriteExtab(Module& pModule)
+{
 }
 
 void ARMGNULDBackend::setUpReachedSectionsForGC(const Module& pModule,

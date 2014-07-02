@@ -165,6 +165,12 @@ private:
   /// target-dependent segments
   virtual void doCreateProgramHdrs(Module& pModule);
 
+  /// mayRewriteExtab - whether we can rewrite the output .ARM.extab section
+  bool mayRewriteExtab(Module& pModule);
+
+  /// rewriteExtab - reduce the size of the output .ARM.extab section
+  void rewriteExtab(Module& pModule);
+
 private:
   Relocator* m_pRelocator;
 
