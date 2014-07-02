@@ -447,7 +447,48 @@ void ARMGNULDBackend::postMergeSections(Module& pModule)
 
 bool ARMGNULDBackend::mayRewriteExtab(Module& pModule)
 {
-  return false;
+  // Check whether there are some relocations referencing .ARM.extab or not.
+  // Since we rely on the .ARM.exidx heuristic to split .ARM.extab entries,
+  // we have to make sure only .ARM.exidx references the output .ARM.extab
+  // section.
+
+  Module::obj_iterator input = pModule.obj_begin();
+  Module::obj_iterator inEnd = pModule.obj_end();
+  for (; input != inEnd; ++input) {
+    getRelocator()->initializeScan(**input);
+
+    LDContext::sect_iterator rs = (*input)->context()->relocSectBegin();
+    LDContext::sect_iterator rsEnd = (*input)->context()->relocSectEnd();
+    for (; rs != rsEnd; ++rs) {
+      // Skip the relocation section if it is marked as ignored, or not
+      // having any relocation data.
+      if (LDFileFormat::Ignore == (*rs)->kind() || !(*rs)->hasRelocData())
+        continue;
+
+      // Skip the section if the linked section is a part of the output
+      // .ARM.exidx section.
+      LDSection* section = (*rs)->getLink();
+      if (LDFileFormat::Target == section->kind() &&
+          llvm::ELF::SHT_ARM_EXIDX == section->type())
+        continue;
+
+      RelocData::iterator reloc = (*rs)->getRelocData()->begin();
+      RelocData::iterator rEnd = (*rs)->getRelocData()->end();
+      for (; reloc != rEnd; ++reloc) {
+        Relocation* relocation = llvm::cast<Relocation>(reloc);
+        ResolveInfo* info = relocation->symInfo();
+
+        // Return false if there is a relocation to .ARM.extab section.
+        if (info->outSymbol()->hasFragRef() &&
+            (&info->outSymbol()->fragRef()->frag()->getParent()->getSection()
+              == m_pEXTAB))
+          return false;
+      }
+    }
+
+    getRelocator()->finalizeScan(**input);
+  }
+  return true;
 }
 
 void ARMGNULDBackend::rewriteExtab(Module& pModule)
