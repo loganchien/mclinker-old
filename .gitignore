@@ -22,3 +22,5 @@ lib/Script/ScriptScanner.cc
 lib/Script/location.hh
 lib/Script/position.hh
 lib/Script/stack.hh
+docs/doxygen/html
+docs/doxygen/latex
