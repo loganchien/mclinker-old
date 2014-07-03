@@ -70,7 +70,8 @@ MCLDUnittests_LDFLAGS = \
 	$(top_builddir)/$(MCLD_DIR)/libmcld.a \
 	-L$(top_builddir)/utils/gtest/obj -lgtest \
 	-L$(top_builddir)/utils/gtestmain -lgtestmain \
-	$(LLVM_LDFLAGS)
+	$(LLVM_LDFLAGS) \
+	-lz
 
 dist_MCLDUnittests_SOURCES = $(SOURCES)
 
