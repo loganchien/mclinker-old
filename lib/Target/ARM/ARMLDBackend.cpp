@@ -45,6 +45,8 @@
 #include <llvm/Support/Casting.h>
 
 #include <cstring>
+#include <utility>
+#include <vector>
 
 using namespace mcld;
 
@@ -493,6 +495,86 @@ bool ARMGNULDBackend::mayRewriteExtab(Module& pModule)
 
 void ARMGNULDBackend::rewriteExtab(Module& pModule)
 {
+  // Compute the offset to each .ARM.extab entries
+  if (!m_pEXIDX->hasSectionData())
+    return;
+
+  // Collect the start offset of each .ARM.extab entries
+  std::vector<std::pair<Fragment*, FragmentRef::Offset> > offsets;
+
+  Module::obj_iterator input = pModule.obj_begin();
+  Module::obj_iterator inEnd = pModule.obj_end();
+  for (; input != inEnd; ++input) {
+    getRelocator()->initializeScan(**input);
+
+    LDContext::sect_iterator rs = (*input)->context()->relocSectBegin();
+    LDContext::sect_iterator rsEnd = (*input)->context()->relocSectEnd();
+    for (; rs != rsEnd; ++rs) {
+      // Skip the relocation section if it is marked as ignored, or not
+      // having any relocation data.
+      if (LDFileFormat::Ignore == (*rs)->kind() || !(*rs)->hasRelocData())
+        continue;
+
+      // Skip the section if the linked section is not .ARM.exidx sections.
+      LDSection* section = (*rs)->getLink();
+      if (LDFileFormat::Target != section->kind() ||
+          llvm::ELF::SHT_ARM_EXIDX != section->type())
+        continue;
+
+      RelocData::iterator reloc = (*rs)->getRelocData()->begin();
+      RelocData::iterator rEnd = (*rs)->getRelocData()->end();
+      for (; reloc != rEnd; ++reloc) {
+        // Only the fixups at the second word are considered.
+        FragmentRef& fixup_frag_ref = reloc->targetRef();
+        FragmentRef::Offset fixup_offset = fixup_frag_ref.offset();
+        if ((fixup_offset & 0x7u) != 0x4u)
+          continue;
+
+        // Check the availability of the destination symbol.
+        ResolveInfo* info = reloc->symInfo();
+        LDSymbol* dest = info->outSymbol();
+        if (!dest->hasFragRef())
+          continue;
+
+        FragmentRef* dest_frag_ref = dest->fragRef();
+        Fragment* dest_frag = dest_frag_ref->frag();
+        if (&dest_frag->getParent()->getSection() != m_pEXTAB)
+          continue;
+
+        // Compute the inplace offset in the second word.
+        RegionFragment* fixup_frag =
+            llvm::cast<RegionFragment>(fixup_frag_ref.frag());
+
+        FragmentRef::Offset inplace_offset =
+            *reinterpret_cast<const uint32_t*>(fixup_frag->getRegion().data() +
+                                               fixup_offset);
+
+        // Append the starting offset.
+        offsets.push_back(std::make_pair(dest_frag,
+                                         dest_frag_ref->offset() +
+                                         reloc->addend() +
+                                         inplace_offset));
+      }
+    }
+
+    getRelocator()->finalizeScan(**input);
+  }
+
+  // TODO: Split the .ARM.extab fragments.
+
+  // TODO: Update the FragmentRef in the .rel.ARM.extab.
+
+  // TODO: Update and deduplicate the FragmentRef in the .rel.ARM.exidx.
+
+#if 0
+  SectionData* data = m_pEXIDX->getSectionData();
+  for (SectionData::iterator it = data->begin(), end = data->end();
+       it != end; ++it) {
+    if (RegionFragment* frag = llvm::dyn_cast<RegionFragment>(it)) {
+      (void)frag;
+    }
+  }
+#endif
 }
 
 void ARMGNULDBackend::setUpReachedSectionsForGC(const Module& pModule,
