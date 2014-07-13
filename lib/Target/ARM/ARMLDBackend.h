@@ -165,11 +165,32 @@ private:
   /// target-dependent segments
   virtual void doCreateProgramHdrs(Module& pModule);
 
+
+  ///==========================================================================
+  /// ARM Exception Handling Table Deduplication Member Functions
+  ///==========================================================================
+
   /// mayRewriteExtab - whether we can rewrite the output .ARM.extab section
   bool mayRewriteExtab(Module& pModule);
 
   /// rewriteExtab - reduce the size of the output .ARM.extab section
   void rewriteExtab(Module& pModule);
+
+  /// ExtabEntryOffsets - vector type to keep all .ARM.extab entry offsets
+  typedef std::vector<FragmentRef::Offset> ExtabEntryOffsets;
+
+  /// FragmentEntryOffsetsMap - map from fragment to entry offsets
+  typedef std::map<Fragment*, ExtabEntryOffsets> FragmentEntryOffsetsMap;
+
+  /// collectExtabEntryOffsets - collect the start offsets of each entries
+  void collectExtabEntryOffsets(FragmentEntryOffsetsMap& pOffsets,
+                                Module& pModule);
+
+  /// splitExtabEntry - split the entries to several fragments
+  void splitExtabEntry(Module& pModule,
+                       const FragmentEntryOffsetsMap& pOffsets);
+
+  ///==========================================================================
 
 private:
   Relocator* m_pRelocator;

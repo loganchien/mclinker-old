@@ -485,8 +485,9 @@ bool ARMGNULDBackend::mayRewriteExtab(Module& pModule)
         // Return false if there is a relocation to .ARM.extab section.
         if (info->outSymbol()->hasFragRef() &&
             (&info->outSymbol()->fragRef()->frag()->getParent()->getSection()
-              == m_pEXTAB))
+              == m_pEXTAB)) {
           return false;
+        }
       }
     }
 
@@ -495,17 +496,11 @@ bool ARMGNULDBackend::mayRewriteExtab(Module& pModule)
   return true;
 }
 
-void ARMGNULDBackend::rewriteExtab(Module& pModule)
+void ARMGNULDBackend::collectExtabEntryOffsets(
+    FragmentEntryOffsetsMap& pOffsets,
+    Module& pModule)
 {
-  // Compute the offset to each .ARM.extab entries
-  if (!m_pEXIDX->hasSectionData())
-    return;
-
-  // Collect the start offset of each .ARM.extab entries
-  typedef std::vector<FragmentRef::Offset> Offsets;
-  typedef std::map<Fragment*, Offsets> FragmentOffsetsMap;
-  FragmentOffsetsMap offsets;
-
+  // Collect all of the possible starting offset of entries.
   for (Module::obj_iterator input = pModule.obj_begin(),
                             inEnd = pModule.obj_end();
        input != inEnd; ++input) {
@@ -547,66 +542,80 @@ void ARMGNULDBackend::rewriteExtab(Module& pModule)
           continue;
 
         // Compute the start offset of the .ARM.extab entry.
-        RegionFragment* fixup_frag =
-            llvm::cast<RegionFragment>(fixup_frag_ref.frag());
-
-        FragmentRef::Offset inplace_offset =
-            *reinterpret_cast<const uint32_t*>(fixup_frag->getRegion().data() +
-                                               fixup_offset);
-
         FragmentRef::Offset start_offset =
-            dest_frag_ref->offset() + reloc->addend() + inplace_offset;
+            dest_frag_ref->offset() + reloc->addend() + reloc->target();
 
         // Append the starting offset.
-        offsets[dest_frag].push_back(start_offset);
+        pOffsets[dest_frag].push_back(start_offset);
       }
     }
 
     getRelocator()->finalizeScan(**input);
   }
 
-  // Split the .ARM.extab entries to Fragments
+  // Sort the offsets in ascending order.
+  for (FragmentEntryOffsetsMap::iterator it = pOffsets.begin(),
+                                         end = pOffsets.end();
+       it != end; ++it) {
+    ExtabEntryOffsets& offsets = it->second;
+    std::sort(offsets.begin(), offsets.end());
+  }
+}
+
+void ARMGNULDBackend::splitExtabEntry(Module& pModule,
+                                      const FragmentEntryOffsetsMap& pOffsets)
+{
   typedef std::map<FragmentRef::Offset, Fragment*> OffsetFragmentMap;
   typedef std::map<Fragment*, OffsetFragmentMap> ReplaceMap;
   ReplaceMap replacement;
 
-  SectionData::FragmentListType& extab_frag_list =
+  SectionData::FragmentListType& frag_list =
       m_pEXTAB->getSectionData()->getFragmentList();
-  for (FragmentOffsetsMap::iterator it = offsets.begin(), end = offsets.end();
+
+  for (FragmentEntryOffsetsMap::const_iterator it = pOffsets.begin(),
+                                               end = pOffsets.end();
        it != end; ++it) {
     RegionFragment* frag = llvm::cast<RegionFragment>(it->first);
-    const char* frag_data = frag->getRegion().data();
-
-    // Sort the start offsets for each Fragments.
-    Offsets& start_offsets = it->second;
-    sort(start_offsets.begin(), start_offsets.end());
-
-    // Create new RegionFragments.
-    for (size_t i = 0, n = start_offsets.size(); i < n; ++i) {
+    const ExtabEntryOffsets& frag_offsets = it->second;
+    for (size_t i = 0, n = frag_offsets.size(); i < n; ++i) {
+      // Compute the entry size.
       bool is_frag_last_entry = (i == n - 1);
-      unsigned size = is_frag_last_entry
-          ? (frag->size() - start_offsets[i])
-          : (start_offsets[i + 1] - start_offsets[i]);
+      unsigned offset = frag_offsets[i];
+      unsigned size = is_frag_last_entry ? (frag->size() - offset)
+                                         : (frag_offsets[i + 1] - offset);
 
+      // Create new region fragment for this entry.
+      const char* data = frag->getRegion().data();
       RegionFragment* new_frag =
-          new RegionFragment(llvm::StringRef(frag_data + start_offsets[i],
-                                             size),
-                             m_pEXTAB->getSectionData());
+          new RegionFragment(llvm::StringRef(data + offset, size));
 
-      extab_frag_list.insert(frag, new_frag);
+      // FIXME: Also create a symbol at region start.
 
-      replacement[frag].insert(std::make_pair(start_offsets[i], new_frag));
+      // Insert the new fragment to the .ARM.extab output section, and update
+      // the section size properly.
+      new_frag->setParent(m_pEXTAB->getSectionData());
+      frag_list.insert(frag, new_frag);
+      m_pEXTAB->setSize(m_pEXTAB->size() + size);  // FIXME: Delete this.
 
-      fprintf(stderr, "DEBUG: fragment=%p, offset=%u size=%u -> new_frag=%p\n",
-              frag, (unsigned)start_offsets[i], size, new_frag);
-
-      for (OffsetFragmentMap::iterator it = replacement[frag].begin(), end = replacement[frag].end(); it != end; ++it) {
-        fprintf(stderr, "-- DEBUG: %u\n", (unsigned)it->first);
-      }
+      // Record the new fragment.
+      replacement[frag].insert(std::make_pair(offset, new_frag));
     }
   }
-  fprintf(stderr, "DEBUG: ---------------------------------------------\n");
+}
 
+void ARMGNULDBackend::rewriteExtab(Module& pModule)
+{
+  if (!m_pEXIDX->hasSectionData())
+    return;
+
+  // Collect the offsets of each entries
+  FragmentEntryOffsetsMap offsets;
+  collectExtabEntryOffsets(offsets, pModule);
+
+  // Split the .ARM.extab entries to Fragments
+  splitExtabEntry(pModule, offsets);
+
+#if 0
   // Update the relocations in .rel.ARM.exidx and .rel.ARM.extab
   for (Module::obj_iterator input = pModule.obj_begin(),
                             inEnd = pModule.obj_end();
@@ -650,27 +659,18 @@ void ARMGNULDBackend::rewriteExtab(Module& pModule)
             continue;
 
           // Compute the start offset of the .ARM.extab entry.
-          RegionFragment* fixup_frag =
-              llvm::cast<RegionFragment>(fixup_frag_ref.frag());
-
-          FragmentRef::Offset inplace_offset =
-              *reinterpret_cast<const uint32_t*>(
-                  fixup_frag->getRegion().data() + fixup_offset);
-
           FragmentRef::Offset start_offset =
-              dest_frag_ref->offset() + reloc->addend() + inplace_offset;
+              dest_frag_ref->offset() + reloc->addend() + reloc->target();
 
           // Update the Fragment.
-          *reinterpret_cast<uint32_t*>(
-              const_cast<char*>(fixup_frag->getRegion().data()) +
-              fixup_offset) = 0;
+          reloc->target() = 0;
 
           fprintf(stderr, "dest_frag=%p offset=%u\n",
                   dest_frag, (unsigned)start_offset);
           Fragment* new_frag = replacement[dest_frag][start_offset];
           assert(new_frag != NULL && "unexpected dead");
           fprintf(stderr, "DEBUG: new_frag = %p\n", new_frag);
-          dest_frag_ref->assign(*new_frag, 0);
+          //dest_frag_ref->assign(*new_frag, 0);
         }
         continue;
       }
@@ -707,11 +707,12 @@ void ARMGNULDBackend::rewriteExtab(Module& pModule)
   fprintf(stderr, "DEBUG: --------AFTER UPDATE-------------------------\n");
 
   // Erase the original fragments.
-  for (FragmentOffsetsMap::iterator it = offsets.begin(), end = offsets.end();
+  for (FragmentEntryOffsetsMap::iterator it = offsets.begin(), end = offsets.end();
        it != end; ++it) {
     RegionFragment* frag = llvm::cast<RegionFragment>(it->first);
-    extab_frag_list.remove(frag);
+    frag_list.remove(frag);
   }
+#endif
 
   // TODO: Deduplicate the FragmentRef in the .rel.ARM.exidx
 }
