@@ -186,6 +186,9 @@ private:
   void collectExtabEntryOffsets(FragmentEntryOffsetsMap& pOffsets,
                                 Module& pModule);
 
+  /// Create a temporary symbol for splitted extab entry.
+  LDSymbol* createExtabSymbol(Module& pModule, Fragment* pFragment);
+
   /// splitExtabEntry - split the entries to several fragments
   void splitExtabEntry(Module& pModule,
                        const FragmentEntryOffsetsMap& pOffsets);
