@@ -296,6 +296,12 @@ bool ObjectLinker::readRelocations() {
   return true;
 }
 
+/// preMergeSections - hook to be executed before merging the input sections
+void ObjectLinker::preMergeSections(Module& pModule)
+{
+  m_LDBackend.preMergeSections(pModule);
+}
+
 /// mergeSections - put allinput sections into output sections
 bool ObjectLinker::mergeSections() {
   // Set up input/output from ldscript requirement if any
@@ -330,6 +336,10 @@ bool ObjectLinker::mergeSections() {
     }  // for each output section description
   }
 
+  // Call the hooks before merging the sections.
+  preMergeSections(*m_pModule);
+
+  // Merge the sections.
   ObjectBuilder builder(*m_pModule);
   Module::obj_iterator obj, objEnd = m_pModule->obj_end();
   for (obj = m_pModule->obj_begin(); obj != objEnd; ++obj) {

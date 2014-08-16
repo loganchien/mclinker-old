@@ -61,6 +61,9 @@ class ObjectLinker {
   /// dataStrippingOpt - optimizations for reducing code size
   void dataStrippingOpt();
 
+  /// preMergeSections - hook to be executed before merging the input sections
+  void preMergeSections(Module& pModule);
+
   /// mergeSections - put allinput sections into output sections
   bool mergeSections();
 

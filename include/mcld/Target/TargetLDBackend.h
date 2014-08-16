@@ -109,6 +109,10 @@ class TargetLDBackend {
   /// sections.
   virtual bool allocateCommonSymbols(Module& pModule) = 0;
 
+  /// preMergeSections - hook to be executed before merging the input sections
+  virtual void preMergeSections(Module& pModule)
+  { }
+
   /// mergeSection - merge target dependent sections.
   virtual bool mergeSection(Module& pModule,
                             const Input& pInputFile,
