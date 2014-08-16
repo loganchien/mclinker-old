@@ -184,8 +184,14 @@ SOURCE = ADT/StringEntry.cpp \
 	Target/ARM/ARMGOT.cpp \
 	Target/ARM/ARMGOT.h \
 	Target/ARM/ARM.h \
+	Target/ARM/ARMExData.h \
+	Target/ARM/ARMExData.cpp \
+	Target/ARM/ARMExEntry.h \
+	Target/ARM/ARMExEntry.cpp \
 	Target/ARM/ARMLDBackend.cpp \
 	Target/ARM/ARMLDBackend.h \
+	Target/ARM/ARMNameToExDataMap.h \
+	Target/ARM/ARMNameToExDataMap.cpp \
 	Target/ARM/ARMPLT.cpp \
 	Target/ARM/ARMPLT.h \
 	Target/ARM/ARMRelocationFunctions.h \
