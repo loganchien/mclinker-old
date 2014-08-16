@@ -10,7 +10,9 @@
 #include "ARMGNUInfo.h"
 #include "ARMELFAttributeData.h"
 #include "ARMELFDynamic.h"
+#include "ARMExData.h"
 #include "ARMLDBackend.h"
+#include "ARMNameToExDataMap.h"
 #include "ARMRelocator.h"
 #include "ARMToARMStub.h"
 #include "ARMToTHMStub.h"
@@ -76,6 +78,7 @@ ARMGNULDBackend::~ARMGNULDBackend() {
   delete m_pRelPLT;
   delete m_pDynamic;
   delete m_pAttrData;
+  clearInputExDataMaps();
 }
 
 void ARMGNULDBackend::initTargetSections(Module& pModule,
@@ -393,6 +396,11 @@ uint64_t ARMGNULDBackend::emitSectionData(const LDSection& pSection,
 /// finalizeSymbol - finalize the symbol value
 bool ARMGNULDBackend::finalizeTargetSymbols() {
   return true;
+}
+
+void ARMGNULDBackend::preMergeSections(Module& pModule)
+{
+  buildInputExDataMaps(pModule);
 }
 
 bool ARMGNULDBackend::mergeSection(Module& pModule,
@@ -745,6 +753,75 @@ bool ARMGNULDBackend::mayHaveUnsafeFunctionPointerAccess(
   llvm::StringRef name(pSection.name());
   return !name.startswith(".ARM.exidx") && !name.startswith(".ARM.extab") &&
          GNULDBackend::mayHaveUnsafeFunctionPointerAccess(pSection);
+}
+
+/// clearInputExDataMaps - delete the exception section maps for each input
+/// object files.
+void ARMGNULDBackend::clearInputExDataMaps()
+{
+  // Delete the ARMNameToExDataMap of each input object file.
+  for (InputToExDataMapMap::iterator it = m_InputToExDataMapMap.begin(),
+                                     end = m_InputToExDataMapMap.end();
+       it != end; ++it) {
+    delete it->second;
+  }
+
+  // Clear the map from Input to ARMNameToExDataMap.
+  m_InputToExDataMapMap.clear();
+}
+
+/// getOrCreateInputExDataMap - get the ARMNameToExDataMap entry for a input
+/// object file.
+ARMNameToExDataMap* ARMGNULDBackend::getOrCreateInputExDataMap(Input& pInput)
+{
+  ARMNameToExDataMap*& result = m_InputToExDataMapMap[&pInput];
+  if (NULL == result) {
+    result = new ARMNameToExDataMap();
+  }
+  return result;
+}
+
+/// buildInputExDataMaps - build the exception section maps for each input
+/// object files.
+void ARMGNULDBackend::buildInputExDataMaps(Module& pModule)
+{
+  for (Module::const_obj_iterator inputIt = pModule.obj_begin(),
+                                  inputEnd = pModule.obj_end();
+       inputIt != inputEnd; ++inputIt) {
+    Input* input = *inputIt;
+    ARMNameToExDataMap* exDataMap = getOrCreateInputExDataMap(*input);
+
+    // Build the ARMNameToExDataMap for this input object file.
+    buildInputExDataMap(*input, *exDataMap);
+  }
+}
+
+/// buildInputExDataMap - build the exception section maps for a particular
+/// input object file.
+void ARMGNULDBackend::buildInputExDataMap(Input& pInput,
+                                          ARMNameToExDataMap& pExDataMap)
+{
+  LDContext* inputCtx = pInput.context();
+  for (LDContext::const_sect_iterator sectIt = inputCtx->sectBegin(),
+                                      sectEnd = inputCtx->sectEnd();
+       sectIt != sectEnd; ++sectIt) {
+    LDSection* sect = *sectIt;
+    llvm::StringRef sectName(sect->name());
+
+    if (sectName.startswith(".ARM.exidx")) {
+      ARMExData* exData = pExDataMap.getOrCreateByExSection(sectName);
+      exData->setExIdx(sect);
+    } else if (sectName.startswith(".ARM.extab")) {
+      ARMExData* exData = pExDataMap.getOrCreateByExSection(sectName);
+      exData->setExTab(sect);
+    } else if (sectName.startswith(".rel.ARM.exidx")) {
+      ARMExData* exData = pExDataMap.getOrCreateByRelExSection(sectName);
+      exData->setRelExIdx(sect);
+    } else if (sectName.startswith(".rel.ARM.extab")) {
+      ARMExData* exData = pExDataMap.getOrCreateByRelExSection(sectName);
+      exData->setRelExTab(sect);
+    }
+  }
 }
 
 namespace mcld {

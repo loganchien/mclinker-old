@@ -15,10 +15,12 @@
 #include <mcld/LD/LDSection.h>
 #include <mcld/Target/GNULDBackend.h>
 #include <mcld/Target/OutputRelocSection.h>
+#include <map>
 
 namespace mcld {
 
 class ARMELFAttributeData;
+class ARMNameToExDataMap;
 class GNUInfo;
 class LinkerConfig;
 
@@ -112,6 +114,9 @@ class ARMGNULDBackend : public GNULDBackend {
   /// finalizeTargetSymbols - finalize the symbol value
   bool finalizeTargetSymbols();
 
+  /// preMergeSections - hook to be executed before merging the input sections
+  void preMergeSections(Module& pModule);
+
   /// mergeSection - merge target dependent sections
   bool mergeSection(Module& pModule, const Input& pInput, LDSection& pSection);
 
@@ -162,6 +167,23 @@ class ARMGNULDBackend : public GNULDBackend {
   virtual void doCreateProgramHdrs(Module& pModule);
 
  private:
+  /// clearInputExDataMaps - delete the exception section maps for each
+  /// input object files.
+  void clearInputExDataMaps();
+
+  /// getOrCreateInputExDataMap - get the ARMExDataMap entry for a input
+  /// object file.
+  ARMNameToExDataMap* getOrCreateInputExDataMap(Input& pInput);
+
+  /// buildInputExDataMaps - build the exception section maps for each
+  /// input object files.
+  void buildInputExDataMaps(Module& pModule);
+
+  /// buildInputExDataMap - build the exception section maps for a particular
+  /// input object file.
+  void buildInputExDataMap(Input& pInput, ARMNameToExDataMap& pExDataMap);
+
+ private:
   Relocator* m_pRelocator;
 
   ARMGOT* m_pGOT;
@@ -186,6 +208,10 @@ class ARMGNULDBackend : public GNULDBackend {
   //  LDSection* m_pPreemptMap;      // .ARM.preemptmap
   //  LDSection* m_pDebugOverlay;    // .ARM.debug_overlay
   //  LDSection* m_pOverlayTable;    // .ARM.overlay_table
+
+  /// m_InputToExDataMapMap - map input files to exception section map.
+  typedef std::map<Input*, ARMNameToExDataMap*> InputToExDataMapMap;
+  InputToExDataMapMap m_InputToExDataMapMap;
 };
 }  // namespace mcld
 
