@@ -793,6 +793,27 @@ void ARMGNULDBackend::buildInputExDataMaps(Module& pModule)
 
     // Build the ARMNameToExDataMap for this input object file.
     buildInputExDataMap(*input, *exDataMap);
+
+    // Check whether we can rewrite the ARMExData in this ARMNameToExDataMap.
+    checkExDataRewritable(*input, *exDataMap);
+
+#if defined(DEBUG_EX_OPT)
+    // Print the eligible exception handling sections.
+    for (ARMNameToExDataMap::iterator it = exDataMap->begin(),
+                                      end = exDataMap->end(); it != end; ++it) {
+      ARMExData* exData = it->second;
+      if (exData->isRewritable()) {
+        llvm::errs() << "- name: \"" << it->first << "\" ELIGIBLE\n";
+      } else {
+        llvm::errs() << "- name: \"" << it->first << "\" NOT REWRITABLE\n";
+      }
+
+      llvm::errs() << "  - .ARM.exidx: " << exData->exIdx() << "\n";
+      llvm::errs() << "  - .ARM.extab: " << exData->exTab() << "\n";
+      llvm::errs() << "  - .rel.ARM.exidx: " << exData->relExIdx() << "\n";
+      llvm::errs() << "  - .rel.ARM.extab: " << exData->relExTab() << "\n";
+    }
+#endif
   }
 }
 
@@ -820,6 +841,205 @@ void ARMGNULDBackend::buildInputExDataMap(Input& pInput,
     } else if (sectName.startswith(".rel.ARM.extab")) {
       ARMExData* exData = pExDataMap.getOrCreateByRelExSection(sectName);
       exData->setRelExTab(sect);
+    }
+  }
+}
+
+/// checkExDataRewritable - check whether the ARMExData in the
+/// ARMNameToExDataMap is rewritable or not.
+void ARMGNULDBackend::checkExDataRewritable(Input& pInput,
+                                            ARMNameToExDataMap& pExDataMap) {
+  // To reduce the possible incorrect optimization, we are only rewriting the
+  // exception handling sections if the constraints are satisfied:
+  //
+  //   1. The ARMExData has both .ARM.exidx and .rel.ARM.exidx sections.
+  //
+  //   2. The linked section of .ARM.exidx is not ignored.
+  //
+  //   3. The .ARM.exidx section should not have non-local symbol, and the
+  //      local symbols of .ARM.exidx can only appears at offset 0.
+  //
+  //   4. The .ARM.extab section should not have non-local symbol, and the
+  //      local symbols of .ARM.extab can only appears at offset 0.
+  //
+  //   5. The .ARM.exidx is only referencing its corresponding .ARM.extab in
+  //      its even words.
+  //
+  //   6. The .ARM.extab is only referenced by the even words of the
+  //      corresponding .ARM.exidx section.
+  //
+  // AFAIK, the existing assemblers and compilers will satisfy these
+  // constraints without any problem.
+
+  LDContext* inputCtx = pInput.context();
+
+  // Check the section constraints.
+  for (ARMNameToExDataMap::iterator it = pExDataMap.begin(),
+                                    end = pExDataMap.end(); it != end; ++it) {
+    ARMExData* exData = it->second;
+
+    if (NULL == exData->exIdx() || NULL == exData->relExIdx()) {
+      // It is quite strange that .ARM.exidx or .rel.ARM.exidx is missing,
+      // since these are essential to the ARM EHABI.  Just ignore this case,
+      // and proceed.
+      exData->setIsRewritable(false);
+      continue;
+    }
+
+    if (LDFileFormat::Ignore == exData->exIdx()->getLink()->kind()) {
+      // The associated text section is GC'ed, thus we don't have to process
+      // the exception sections.
+      exData->setIsRewritable(false);
+      continue;
+    }
+
+    if (const SectionData* sectData = exData->exIdx()->getSectionData()) {
+      for (SectionData::const_iterator it = sectData->begin(),
+                                       end = sectData->end(); it != end; ++it) {
+        if ((it->size() & 7) != 0) {
+          // According to ARM EHABI, the size of .ARM.exidx should always be
+          // multiple of 8-bytes.
+          exData->setIsRewritable(false);
+          break;
+        }
+      }
+    }
+  }
+
+  // Check the symbol constraint for each symbols.
+  for (LDContext::const_sym_iterator symIt = inputCtx->symTabBegin(),
+                                     symEnd = inputCtx->symTabEnd();
+       symIt != symEnd; ++symIt) {
+    LDSymbol* sym = *symIt;
+    if (sym->isNull() || !sym->hasFragRef()) {
+      continue;
+    }
+
+    const FragmentRef* fragRef = sym->fragRef();
+    if (fragRef->isNull()) {
+      continue;
+    }
+
+    if (ResolveInfo::Local != sym->binding() || 0 != fragRef->offset()) {
+      const Fragment* frag = fragRef->frag();
+      const LDSection& section = frag->getParent()->getSection();
+      llvm::StringRef sectName(section.name());
+      if (sectName.startswith(".ARM.exidx") ||
+          sectName.startswith(".ARM.extab")) {
+        ARMExData* exData = pExDataMap.getByExSection(sectName);
+        exData->setIsRewritable(false);
+#if defined(DEBUG_EX_OPT)
+        llvm::errs() << "NON-REWRITABLE:"
+                     << " .ARM.exidx" << exData->name()
+                     << " .ARM.extab" << exData->name()
+                     << " -- because symbol "
+                     << sym->name() << " is at " << sectName << "+"
+                     << fragRef->offset() << "\n";
+#endif
+      }
+    }
+  }
+
+  // Check the relocations.
+  for (LDContext::const_sect_iterator rsIt = inputCtx->relocSectBegin(),
+                                      rsEnd = inputCtx->relocSectEnd();
+       rsIt != rsEnd; ++rsIt) {
+    LDSection* sect = *rsIt;
+    llvm::StringRef sectName(sect->name());
+
+    assert(sect->hasRelocData() && "Reloc section should have RelocData");
+    RelocData* relocData = sect->getRelocData();
+
+    if (sectName.startswith(".rel.ARM.exidx")) {
+      scanRelExIdxToCheckRewritable(sectName, *relocData, pExDataMap);
+    } else {
+      scanRelToCheckRewritable(sectName, *relocData, pExDataMap);
+    }
+  }
+}
+
+void ARMGNULDBackend::scanRelToCheckRewritable(llvm::StringRef pRelocSectName,
+                                               RelocData& pRelocData,
+                                               ARMNameToExDataMap& pExDataMap)
+{
+  // No reference to .ARM.extab are allowed.  If there is one RelocData
+  // referencing .ARM.extab, then mark that section as non-writable.
+  for (RelocData::iterator rel = pRelocData.begin(),
+                           end = pRelocData.end(); rel != end; ++rel) {
+    LDSymbol* destSym = rel->symInfo()->outSymbol();
+    if (destSym->isNull() || !destSym->hasFragRef()) {
+      continue;
+    }
+    const FragmentRef* destFragRef = destSym->fragRef();
+    if (destFragRef->isNull()) {
+      continue;
+    }
+    const Fragment* destFrag = destFragRef->frag();
+    const LDSection* destSect= &destFrag->getParent()->getSection();
+    llvm::StringRef destSectName(destSect->name());
+    if (destSectName.startswith(".ARM.extab")) {
+      ARMExData* exData = pExDataMap.getByExSection(destSectName);
+      exData->setIsRewritable(false);
+#if defined(DEBUG_EX_OPT)
+      llvm::errs() << "NON-REWRITABLE:"
+                   << " .ARM.exidx" << exData->name()
+                   << " .ARM.extab" << exData->name()
+                   << " -- unexpected reference from "
+                   << pRelocSectName << "\n";
+#endif
+    }
+  }
+}
+
+void ARMGNULDBackend::
+scanRelExIdxToCheckRewritable(llvm::StringRef pRelocSectName,
+                              RelocData& pRelocData,
+                              ARMNameToExDataMap& pExDataMap)
+{
+  ARMExData* relocExData = pExDataMap.getByRelExSection(pRelocSectName);
+
+  for (RelocData::iterator rel = pRelocData.begin(),
+                           end = pRelocData.end(); rel != end; ++rel) {
+    const FragmentRef& fixupFragRef = rel->targetRef();
+
+    LDSymbol* destSym = rel->symInfo()->outSymbol();
+    if (destSym->isNull() || !destSym->hasFragRef()) {
+      continue;
+    }
+
+    const FragmentRef* destFragRef = destSym->fragRef();
+    if (destFragRef->isNull()) {
+      continue;
+    }
+
+    const Fragment* destFrag = destFragRef->frag();
+    const LDSection* destSect= &destFrag->getParent()->getSection();
+
+    // If this is the odd word, then this should not reference any .ARM.extab
+    // sections, including the corresponding one.  If this is the even word,
+    // then this should only access the corresponding .ARM.extab.
+    bool isEvenWord = ((fixupFragRef.offset() & 0x7) == 4);
+
+    if (isEvenWord && destSect == relocExData->exTab()) {
+      // If this fixup is at the even words and the destination is the
+      // corresponding .ARM.extab section, then this is a good relocation.
+      continue;
+    }
+
+    llvm::StringRef destSectName(destSect->name());
+    if (destSectName.startswith(".ARM.extab")) {
+      // Relocation is either not in the even words, or this is an unexpected
+      // relocation to .ARM.extab sections which is not associated with
+      // this .ARM.exidx section.
+      ARMExData* exData = pExDataMap.getByExSection(destSectName);
+      exData->setIsRewritable(false);
+#if defined(DEBUG_EX_OPT)
+      llvm::errs() << "NON-REWRITABLE:"
+                   << " .ARM.exidx" << exData->name()
+                   << " .ARM.extab" << exData->name()
+                   << " -- unexpected reference from "
+                   << pRelocSectName << "\n";
+#endif
     }
   }
 }

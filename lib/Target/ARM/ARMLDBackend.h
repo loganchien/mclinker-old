@@ -184,6 +184,19 @@ class ARMGNULDBackend : public GNULDBackend {
   void buildInputExDataMap(Input& pInput, ARMNameToExDataMap& pExDataMap);
 
  private:
+  /// checkExDataRewritable - check whether the ARMExData in the
+  /// ARMNameToExDataMap is rewritable or not.
+  void checkExDataRewritable(Input& pInput, ARMNameToExDataMap& pExDataMap);
+
+  void scanRelToCheckRewritable(llvm::StringRef pRelocSectName,
+                                RelocData& pRelocData,
+                                ARMNameToExDataMap& pExDataMap);
+
+  void scanRelExIdxToCheckRewritable(llvm::StringRef pRelocSectName,
+                                     RelocData& pRelocData,
+                                     ARMNameToExDataMap& pExDataMap);
+
+ private:
   Relocator* m_pRelocator;
 
   ARMGOT* m_pGOT;
