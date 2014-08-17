@@ -20,6 +20,7 @@
 namespace mcld {
 
 class ARMELFAttributeData;
+class ARMExData;
 class ARMNameToExDataMap;
 class GNUInfo;
 class LinkerConfig;
@@ -195,6 +196,13 @@ class ARMGNULDBackend : public GNULDBackend {
   void scanRelExIdxToCheckRewritable(llvm::StringRef pRelocSectName,
                                      RelocData& pRelocData,
                                      ARMNameToExDataMap& pExDataMap);
+
+ private:
+  /// buildExEntries - build the ARMExEntry for all rewritable ARMExData
+  void buildExEntries(ARMNameToExDataMap& pExDataMap);
+
+  /// buildExEntries - build ARMExEntry for ARMExData
+  void buildExEntries(ARMExData& pExData);
 
  private:
   Relocator* m_pRelocator;

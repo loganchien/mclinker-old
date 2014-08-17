@@ -9,6 +9,8 @@
 #ifndef TARGET_ARM_ARMEXDATA_H
 #define TARGET_ARM_ARMEXDATA_H
 
+#include "ARMExEntry.h"
+
 #include <string>
 
 #include <cstddef>
@@ -62,6 +64,18 @@ public:
   void setIsRewritable(bool rewritable)
   { m_IsRewritable = rewritable; }
 
+  void appendEntry(const ARMExEntry& pEnt)
+  { m_ExTabEntries.push_back(pEnt); }
+
+  typedef std::vector<ARMExEntry>::iterator iterator;
+  typedef std::vector<ARMExEntry>::const_iterator const_iterator;
+
+  iterator       begin()       { return m_ExTabEntries.begin(); }
+  const_iterator begin() const { return m_ExTabEntries.begin(); }
+
+  iterator       end()       { return m_ExTabEntries.end(); }
+  const_iterator end() const { return m_ExTabEntries.end(); }
+
 private:
   /// m_Name - text section name associated with these exception sections.
   std::string m_Name;
@@ -80,6 +94,9 @@ private:
 
   /// m_IsRewritable - Whether we can rewrite these exception sections.
   bool m_IsRewritable;
+
+  /// m_ExTabEntries - .ARM.extab entries.
+  std::vector<ARMExEntry> m_ExTabEntries;
 };
 
 } // namespace of mcld

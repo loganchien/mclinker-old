@@ -45,6 +45,11 @@
 #include <llvm/ADT/Twine.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/ELF.h>
+#include <llvm/Support/Format.h>
+#include <llvm/Support/raw_ostream.h>
+
+#include <algorithm>
+#include <vector>
 
 #include <cstring>
 
@@ -797,6 +802,9 @@ void ARMGNULDBackend::buildInputExDataMaps(Module& pModule)
     // Check whether we can rewrite the ARMExData in this ARMNameToExDataMap.
     checkExDataRewritable(*input, *exDataMap);
 
+    // Build the ARMExEntry for all rewritable ARMExData.
+    buildExEntries(*exDataMap);
+
 #if defined(DEBUG_EX_OPT)
     // Print the eligible exception handling sections.
     for (ARMNameToExDataMap::iterator it = exDataMap->begin(),
@@ -812,6 +820,31 @@ void ARMGNULDBackend::buildInputExDataMaps(Module& pModule)
       llvm::errs() << "  - .ARM.extab: " << exData->exTab() << "\n";
       llvm::errs() << "  - .rel.ARM.exidx: " << exData->relExIdx() << "\n";
       llvm::errs() << "  - .rel.ARM.extab: " << exData->relExTab() << "\n";
+
+      if (exData->begin() != exData->end()) {
+        llvm::errs() << "  - ENTRIES:\n";
+        for (ARMExData::iterator it = exData->begin(), end = exData->end();
+             it != end; ++it) {
+          const llvm::StringRef region = it->getRegion();
+          size_t size = region.size();
+          const char* data = region.data();
+
+          llvm::errs() << "    - entry: [";
+          llvm::errs() << " begin: " << it->getInputOffset();
+          llvm::errs() << " size: " << size;
+          llvm::errs() << " data: " << (const void*)data;
+          llvm::errs() << " ]\n";
+
+          size_t pos = 0;
+          for (size_t i = 0; i < (size + 15) / 16; ++i) {
+            llvm::errs() << "     ";
+            for (size_t j = 0; j < 16 && pos < size; ++j, ++pos) {
+              llvm::errs() << " " << llvm::format("%02X", (uint8_t)data[pos]);
+            }
+            llvm::errs() << "\n";
+          }
+        }
+      }
     }
 #endif
   }
@@ -1081,6 +1114,163 @@ scanRelExIdxToCheckRewritable(llvm::StringRef pRelocSectName,
                    << pRelocSectName << "\n";
 #endif
     }
+  }
+}
+
+/// compareRelocOffset - compare the relocations by their offsets
+static bool compareRelocOffset(const Relocation* a, const Relocation* b) {
+  return ((a->targetRef().offset()) < (b->targetRef().offset()));
+}
+
+/// isRelocDataOffsetAscending - check whether RelocData has been sorted by
+/// their offsets
+static bool isRelocDataOffsetAscending(const RelocData& pRelocData) {
+  FragmentRef::Offset lastOffset = 0;
+  for (RelocData::const_iterator rel = pRelocData.begin(),
+                                 end = pRelocData.end(); rel != end; ++rel) {
+    const FragmentRef& fixupFragRef = rel->targetRef();
+    FragmentRef::Offset fixupOffset = fixupFragRef.offset();
+    if (fixupOffset < lastOffset) {
+      return false;
+    }
+    lastOffset = fixupOffset;
+  }
+  return true;
+}
+
+/// sortRelocData - Sort the Relocations in RelocData by their fixup offsets.
+static void sortRelocData(LDSection& pRelocSect)
+{
+  if (RelocData* relocData = pRelocSect.getRelocData()) {
+    if (!isRelocDataOffsetAscending(*relocData)) {
+      relocData->sort(compareRelocOffset);
+    }
+  }
+}
+
+/// buildExEntries - build the ARMExEntry for all rewritable ARMExData
+void ARMGNULDBackend::buildExEntries(ARMNameToExDataMap& pExDataMap)
+{
+  for (ARMNameToExDataMap::iterator it = pExDataMap.begin(),
+                                    end = pExDataMap.end(); it != end; ++it) {
+    ARMExData* exData = it->second;
+    if (exData->isRewritable()) {
+      buildExEntries(*exData);
+    }
+  }
+}
+
+/// buildExEntries - build ARMExEntry for ARMExData
+void ARMGNULDBackend::buildExEntries(ARMExData& pExData)
+{
+  assert(pExData.isRewritable());
+
+  // Note: The availability of .ARM.exidx and .rel.ARM.exidx are guaranteed
+  // by the checkExDataRewritable().
+  LDSection& exIdx = *pExData.exIdx();
+  LDSection& relExIdx = *pExData.relExIdx();
+
+  LDSection* exTab = pExData.exTab();
+  LDSection* relExTab = pExData.relExTab();
+
+  // Sort the relocations.
+  sortRelocData(relExIdx);
+
+  if (relExTab) {
+    sortRelocData(*relExTab);
+  }
+
+  // Collect the split offsets.
+  std::vector<FragmentRef::Offset> offsets;
+
+  const RelocData* relExIdxData = relExIdx.getRelocData();
+  RelocData::const_iterator relExIdxIt = relExIdxData->begin();
+  RelocData::const_iterator relExIdxEnd = relExIdxData->end();
+
+  const RegionFragment* exIdxFrag =
+      (const RegionFragment*)checkAndFindRegionFragment(exIdx);
+
+  const llvm::StringRef exIdxRegion = exIdxFrag->getRegion();
+
+  // Find the relocations at the even words and obtain the .ARM.extab starting
+  // offsets.
+  for (FragmentRef::Offset offset = 4, end = exIdxRegion.size();
+       offset < end; offset += 8) {
+    // Forward the reloc iterator until the even word is reached.
+    while (relExIdxIt != relExIdxEnd &&
+           relExIdxIt->targetRef().offset() < offset) {
+      ++relExIdxIt;
+    }
+
+    // The relocation with smallest offset is not in this .ARM.exidx entry,
+    // ignore this entry.
+    if (relExIdxIt == relExIdxEnd ||
+        relExIdxIt->targetRef().offset() > offset) {
+      continue;
+    }
+
+    // The starting offset of .ARM.extab entry for this .ARM.exidx entry.
+    FragmentRef::Offset exTabOffset =
+        relExIdxIt->symInfo()->outSymbol()->fragRef()->offset() +
+        relExIdxIt->target();
+
+    offsets.push_back(exTabOffset);
+  }
+
+  if (offsets.empty()) {
+    // If no .ARM.extab entry is found, then return now.
+    return;
+  }
+
+  // Append the size of .ARM.extab.
+  const RegionFragment* exTabFrag =
+      (const RegionFragment*)checkAndFindRegionFragment(*exTab);
+
+  const llvm::StringRef exTabRegion = exTabFrag->getRegion();
+
+  offsets.push_back(exTabRegion.size());
+
+  std::sort(offsets.begin(), offsets.end());
+
+  // Initialize the .rel.ARM.extab iterator.
+  RelocData* relExTabData;
+  RelocData::iterator relExTabIt, relExTabEnd;
+  if (NULL == relExTab) {
+    relExTabData = NULL;
+    relExTabIt = NULL;
+    relExTabEnd = NULL;
+  } else {
+    relExTabData = relExTab->getRelocData();
+    relExTabIt = relExTabData->begin();
+    relExTabEnd = relExTabData->end();
+  }
+
+  // Compute the .ARM.extab entries.
+  const char* exTabRegionData = exTabRegion.data();
+  for (size_t i = 0, n = offsets.size() - 1; i < n; ++i) {
+    FragmentRef::Offset entryBegin = offsets[i];
+    FragmentRef::Offset entryEnd = offsets[i + 1];
+    llvm::StringRef entryRegion(exTabRegionData + entryBegin,
+                                entryEnd - entryBegin);
+
+    // Forward the reloc iterator until the entry begins.
+    while (relExTabIt != relExTabEnd &&
+           relExTabIt->targetRef().offset() < entryBegin) {
+      ++relExTabIt;
+    }
+
+    RelocData::iterator entryRelocBegin = relExTabIt;
+
+    // Forward the reloc iterator until the entry ends.
+    while (relExTabIt != relExTabEnd &&
+           relExTabIt->targetRef().offset() < entryEnd) {
+      ++relExTabIt;
+    }
+
+    RelocData::iterator entryRelocEnd = relExTabIt;
+
+    pExData.appendEntry(ARMExEntry(pExData, entryBegin, entryRegion,
+                                   entryRelocBegin, entryRelocEnd));
   }
 }
 
