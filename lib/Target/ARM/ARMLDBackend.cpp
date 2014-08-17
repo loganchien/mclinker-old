@@ -845,6 +845,36 @@ void ARMGNULDBackend::buildInputExDataMap(Input& pInput,
   }
 }
 
+static const Fragment* checkAndFindRegionFragment(LDSection& pSection)
+{
+  const Fragment* regionFrag = NULL;
+
+  const SectionData* sectData = pSection.getSectionData();
+  for (SectionData::const_iterator it = sectData->begin(),
+                                   end = sectData->end(); it != end; ++it) {
+    switch (it->getKind()) {
+    case Fragment::Alignment:
+    case Fragment::Null:
+      // Expected.  Check next fragment.
+      break;
+
+    case Fragment::Fillment:
+    case Fragment::Target:
+    case Fragment::Stub:
+      return NULL;
+
+    case Fragment::Region:
+      if (regionFrag == NULL) {
+        regionFrag = it;
+      } else {
+        return NULL;
+      }
+      break;
+    }
+  }
+  return regionFrag;
+}
+
 /// checkExDataRewritable - check whether the ARMExData in the
 /// ARMNameToExDataMap is rewritable or not.
 void ARMGNULDBackend::checkExDataRewritable(Input& pInput,
@@ -893,16 +923,26 @@ void ARMGNULDBackend::checkExDataRewritable(Input& pInput,
       continue;
     }
 
-    if (const SectionData* sectData = exData->exIdx()->getSectionData()) {
-      for (SectionData::const_iterator it = sectData->begin(),
-                                       end = sectData->end(); it != end; ++it) {
-        if ((it->size() & 7) != 0) {
-          // According to ARM EHABI, the size of .ARM.exidx should always be
-          // multiple of 8-bytes.
-          exData->setIsRewritable(false);
-          break;
-        }
-      }
+    // Check the fragments in the sections.
+    const Fragment* exIdxFrag = checkAndFindRegionFragment(*exData->exIdx());
+    if (NULL == exIdxFrag) {
+      // Can't find the RegionFragment in .ARM.exidx section.
+      exData->setIsRewritable(false);
+      continue;
+    }
+
+    if ((exIdxFrag->size() & 7) != 0) {
+      // According to ARM EHABI, the size of .ARM.exidx should always be
+      // multiple of 8-bytes.
+      exData->setIsRewritable(false);
+      continue;
+    }
+
+    if (NULL != exData->exTab() &&
+        NULL == checkAndFindRegionFragment(*exData->exTab())) {
+      // Can't find the RegionFragment in .ARM.extab section.
+      exData->setIsRewritable(false);
+      continue;
     }
   }
 
