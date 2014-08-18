@@ -424,6 +424,17 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
         pSection.setKind(LDFileFormat::Ignore);
         return true;
       }
+      InputToExDataMapMap::iterator exDataMapIt =
+          m_InputToExDataMapMap.find(const_cast<Input*>(&pInput));
+      if (exDataMapIt != m_InputToExDataMapMap.end()) {
+        ARMNameToExDataMap* exDataMap = exDataMapIt->second;
+        if (ARMExData* exData = exDataMap->getByExSection(pSection.name())) {
+          if (exData->exTab()) {
+            ObjectBuilder builder(pModule);
+            builder.MergeSection(pInput, *exData->exTab());
+          }
+        }
+      }
     }
     /** fall through **/
     default: {
@@ -804,6 +815,16 @@ void ARMGNULDBackend::buildInputExDataMaps(Module& pModule)
 
     // Build the ARMExEntry for all rewritable ARMExData.
     buildExEntries(*exDataMap);
+
+    // Ignore the .ARM.extab section if rewritable.  We will re-create regions
+    // later in object merging stage.
+    for (ARMNameToExDataMap::iterator it = exDataMap->begin(),
+                                      end = exDataMap->end(); it != end; ++it) {
+      ARMExData* exData = it->second;
+      if (exData->isRewritable() && NULL != exData->exTab()) {
+        exData->exTab()->setKind(LDFileFormat::Ignore);
+      }
+    }
 
 #if defined(DEBUG_EX_OPT)
     // Print the eligible exception handling sections.
