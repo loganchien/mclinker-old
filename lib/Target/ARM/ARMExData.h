@@ -76,6 +76,16 @@ public:
   iterator       end()       { return m_ExTabEntries.end(); }
   const_iterator end() const { return m_ExTabEntries.end(); }
 
+  ARMExEntry* getEntry(FragmentRef::Offset offset) {
+    // TODO: Use better algorithm instead of linear search.
+    for (iterator entIt = begin(), entEnd = end(); entIt != entEnd; ++entIt) {
+      if (entIt->getInputOffset() == offset) {
+        return &*entIt;
+      }
+    }
+    return NULL;
+  }
+
 private:
   /// m_Name - text section name associated with these exception sections.
   std::string m_Name;

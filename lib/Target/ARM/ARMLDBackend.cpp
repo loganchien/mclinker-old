@@ -11,6 +11,7 @@
 #include "ARMELFAttributeData.h"
 #include "ARMELFDynamic.h"
 #include "ARMExData.h"
+#include "ARMExEntry.h"
 #include "ARMLDBackend.h"
 #include "ARMNameToExDataMap.h"
 #include "ARMRelocator.h"
@@ -54,6 +55,36 @@
 #include <cstring>
 
 using namespace mcld;
+
+static const Fragment* checkAndFindRegionFragment(LDSection& pSection)
+{
+  const Fragment* regionFrag = NULL;
+
+  const SectionData* sectData = pSection.getSectionData();
+  for (SectionData::const_iterator it = sectData->begin(),
+                                   end = sectData->end(); it != end; ++it) {
+    switch (it->getKind()) {
+    case Fragment::Alignment:
+    case Fragment::Null:
+      // Expected.  Check next fragment.
+      break;
+
+    case Fragment::Fillment:
+    case Fragment::Target:
+    case Fragment::Stub:
+      return NULL;
+
+    case Fragment::Region:
+      if (regionFrag == NULL) {
+        regionFrag = it;
+      } else {
+        return NULL;
+      }
+      break;
+    }
+  }
+  return regionFrag;
+}
 
 //===----------------------------------------------------------------------===//
 // ARMGNULDBackend
@@ -408,6 +439,34 @@ void ARMGNULDBackend::preMergeSections(Module& pModule)
   buildInputExDataMaps(pModule);
 }
 
+LDSymbol* ARMGNULDBackend::createExTabSymbol(Module& pModule,
+                                             Fragment& pFragment)
+{
+  Resolver::Result resolvedResult;
+  resolvedResult.info =
+      pModule.getNamePool().createSymbol(".ARM.extab",
+                                         false,
+                                         ResolveInfo::Section,
+                                         ResolveInfo::Define,
+                                         ResolveInfo::Local,
+                                         0,
+                                         ResolveInfo::Default);
+  resolvedResult.existent = false;
+  resolvedResult.overriden = true;
+
+  assert(NULL != resolvedResult.info);
+
+  // Input symbol.
+  LDSymbol* inputSym = LDSymbol::Create(*resolvedResult.info);
+  inputSym->setFragmentRef(FragmentRef::Create(pFragment, 0));
+  inputSym->setValue(0);
+
+  // Output symbol is simply an alias to input symbol.
+  resolvedResult.info->setSymPtr(inputSym);
+
+  return inputSym;
+}
+
 bool ARMGNULDBackend::mergeSection(Module& pModule,
                                    const Input& pInput,
                                    LDSection& pSection) {
@@ -429,9 +488,82 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
       if (exDataMapIt != m_InputToExDataMapMap.end()) {
         ARMNameToExDataMap* exDataMap = exDataMapIt->second;
         if (ARMExData* exData = exDataMap->getByExSection(pSection.name())) {
-          if (exData->exTab()) {
-            ObjectBuilder builder(pModule);
-            builder.MergeSection(pInput, *exData->exTab());
+          LDSection& exIdx = *exData->exIdx();
+          LDSection& relExIdx = *exData->relExIdx();
+          const RegionFragment* exIdxFrag =
+              (const RegionFragment*)checkAndFindRegionFragment(exIdx);
+
+          const llvm::StringRef exIdxRegion = exIdxFrag->getRegion();
+
+          RelocData* relExIdxData = relExIdx.getRelocData();
+          RelocData::iterator relExIdxIt = relExIdxData->begin();
+          RelocData::iterator relExIdxEnd = relExIdxData->end();
+
+          // Find the relocations at the even words and obtain the .ARM.extab
+          // starting offsets.
+          for (FragmentRef::Offset offset = 4, end = exIdxRegion.size();
+               offset < end; offset += 8) {
+            // Forward the reloc iterator until the even word is reached.
+            while (relExIdxIt != relExIdxEnd &&
+                   relExIdxIt->targetRef().offset() < offset) {
+              ++relExIdxIt;
+            }
+
+            // The relocation with smallest offset is not in this .ARM.exidx
+            // entry, ignore this entry.
+            if (relExIdxIt == relExIdxEnd ||
+                relExIdxIt->targetRef().offset() > offset) {
+              continue;
+            }
+
+            // The starting offset of .ARM.extab entry for this .ARM.exidx
+            // entry.
+            FragmentRef::Offset exTabOffset =
+              relExIdxIt->symInfo()->outSymbol()->fragRef()->offset() +
+              relExIdxIt->target();
+
+            ARMExEntry* entry = exData->getEntry(exTabOffset);
+            const llvm::StringRef region = entry->getRegion();
+
+            // Find the emitted .ARM.extab entry.
+            uint32_t checksum = ::crc32(0xFFFFFFFF,
+                                        (const uint8_t*)region.data(),
+                                        region.size());
+
+            CRC32ToEntryMap::iterator entIt = m_EmittedEntry.find(checksum);
+            CRC32ToEntryMap::iterator entEnd = m_EmittedEntry.end();
+
+            while (entIt != entEnd) {
+              if (*entIt->second != *entry) {
+                ++entIt;
+              }
+            }
+
+            LDSymbol* dest = NULL;
+            if (entIt != entEnd) {
+              // Reuse the same region fragment.
+              dest = entIt->second->getSymbol();
+            } else {
+              // Create new RegionFragment and LDSymbol.
+              if (!m_pEXTAB->hasSectionData()) {
+                IRBuilder::CreateSectionData(*m_pEXTAB);
+              }
+              if (m_pEXTAB->align() < 4) {
+                m_pEXTAB->setAlign(4);
+              }
+              RegionFragment* frag =
+                  new RegionFragment(entry->getRegion(),
+                                     m_pEXTAB->getSectionData());
+              frag->setOffset(m_pEXTAB->size());
+              m_pEXTAB->setSize(m_pEXTAB->size() + frag->size());
+              dest = createExTabSymbol(pModule, *frag);
+              entry->setRegionFragment(frag);
+              entry->setSymbol(dest);
+              m_EmittedEntry.insert(std::make_pair(checksum, entry));
+            }
+
+            relExIdxIt->target() = 0;
+            relExIdxIt->setSymInfo(dest->resolveInfo());
           }
         }
       }
@@ -897,36 +1029,6 @@ void ARMGNULDBackend::buildInputExDataMap(Input& pInput,
       exData->setRelExTab(sect);
     }
   }
-}
-
-static const Fragment* checkAndFindRegionFragment(LDSection& pSection)
-{
-  const Fragment* regionFrag = NULL;
-
-  const SectionData* sectData = pSection.getSectionData();
-  for (SectionData::const_iterator it = sectData->begin(),
-                                   end = sectData->end(); it != end; ++it) {
-    switch (it->getKind()) {
-    case Fragment::Alignment:
-    case Fragment::Null:
-      // Expected.  Check next fragment.
-      break;
-
-    case Fragment::Fillment:
-    case Fragment::Target:
-    case Fragment::Stub:
-      return NULL;
-
-    case Fragment::Region:
-      if (regionFrag == NULL) {
-        regionFrag = it;
-      } else {
-        return NULL;
-      }
-      break;
-    }
-  }
-  return regionFrag;
 }
 
 /// checkExDataRewritable - check whether the ARMExData in the

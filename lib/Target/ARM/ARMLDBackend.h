@@ -16,11 +16,13 @@
 #include <mcld/Target/GNULDBackend.h>
 #include <mcld/Target/OutputRelocSection.h>
 #include <map>
+#include <zlib.h>
 
 namespace mcld {
 
 class ARMELFAttributeData;
 class ARMExData;
+class ARMExEntry;
 class ARMNameToExDataMap;
 class GNUInfo;
 class LinkerConfig;
@@ -205,6 +207,9 @@ class ARMGNULDBackend : public GNULDBackend {
   void buildExEntries(ARMExData& pExData);
 
  private:
+  LDSymbol* createExTabSymbol(Module& pModule, Fragment& pFragment);
+
+ private:
   Relocator* m_pRelocator;
 
   ARMGOT* m_pGOT;
@@ -233,6 +238,9 @@ class ARMGNULDBackend : public GNULDBackend {
   /// m_InputToExDataMapMap - map input files to exception section map.
   typedef std::map<Input*, ARMNameToExDataMap*> InputToExDataMapMap;
   InputToExDataMapMap m_InputToExDataMapMap;
+
+  typedef std::multimap<uint32_t, ARMExEntry*> CRC32ToEntryMap;
+  CRC32ToEntryMap m_EmittedEntry;
 };
 }  // namespace mcld
 
