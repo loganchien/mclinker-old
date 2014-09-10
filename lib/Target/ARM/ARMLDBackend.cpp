@@ -547,9 +547,10 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
             CRC32ToEntryMap::iterator entEnd = m_EmittedEntry.end();
 
             while (entIt != entEnd) {
-              if (*entIt->second != *entry) {
-                ++entIt;
+              if (*entIt->second == *entry) {
+                break;
               }
+              ++entIt;
             }
 
             LDSymbol* dest = NULL;
