@@ -70,12 +70,7 @@ public:
   Relocation* end() const
   { return m_pRelocEnd; }
 
-  bool operator==(const ARMExEntry& rhs) const
-  {
-    // FIXME: This should return true when the content is equivalent, i.e.
-    // having the same input region data and same relocations.
-    return false;
-  }
+  bool operator==(const ARMExEntry& rhs) const;
 
   bool operator!=(const ARMExEntry& rhs) const
   { return !(*this == rhs); }
