@@ -86,6 +86,19 @@ static const Fragment* checkAndFindRegionFragment(LDSection& pSection)
   return regionFrag;
 }
 
+// isSectionEmpty - Check whether all of the fragments are zero-sized.
+static bool isSectionEmpty(LDSection& pSection)
+{
+  const SectionData* sectData = pSection.getSectionData();
+  for (SectionData::const_iterator it = sectData->begin(),
+                                   end = sectData->end(); it != end; ++it) {
+    if (0 != it->size()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 //===----------------------------------------------------------------------===//
 // ARMGNULDBackend
 //===----------------------------------------------------------------------===//
@@ -1097,8 +1110,20 @@ void ARMGNULDBackend::checkExDataRewritable(Input& pInput,
     if (NULL != exData->exTab() &&
         NULL == checkAndFindRegionFragment(*exData->exTab())) {
       // Can't find the RegionFragment in .ARM.extab section.
-      exData->setIsRewritable(false);
-      continue;
+      if (isSectionEmpty(*exData->exTab())) {
+        // If .ARM.extab is an empty section, then ignore this section.
+        // Ideally, there won't be any reference to this section.  If there
+        // is some reference to this section, then this ARMExData will be
+        // marked non-rewritable in either scanRelExIdxToCheckRewritable() or
+        // scanRelToCheckRewritable().
+        exData->setExTab(NULL);
+        exData->setRelExTab(NULL);
+      } else {
+        // No region fragment found, but there is some non-empty fragment.
+        // This is the unknown format.  Don't rewrite.
+        exData->setIsRewritable(false);
+        continue;
+      }
     }
   }
 
