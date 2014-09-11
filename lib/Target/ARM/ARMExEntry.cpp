@@ -23,7 +23,7 @@ bool ARMExEntry::operator==(const ARMExEntry& rhs) const
   Relocation* rhsIt = rhs.begin();
   Relocation* rhsEnd = rhs.end();
 
-  while (lhsIt != lhsEnd && rhsIt != rhsEnd) {
+  while ((lhsIt && lhsIt != lhsEnd) && (rhsIt && rhsIt != rhsEnd)) {
     // Return false if the word to be filled to fixup is not equal.
     if (lhsIt->target() != rhsIt->target()) {
       return false;
@@ -44,10 +44,7 @@ bool ARMExEntry::operator==(const ARMExEntry& rhs) const
     rhsIt = rhsIt->getNextNode();
   }
 
-  if (lhsIt != lhsEnd || rhsIt != rhsEnd) {
-    // Return false because the number of relocations is not equal.
-    return false;
-  }
-
-  return true;
+  // Return true if both linked lists reach the end of the list.
+  return ((NULL == lhsIt || lhsEnd == lhsIt) &&
+          (NULL == rhsIt || rhsEnd == rhsIt));
 }
