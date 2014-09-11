@@ -496,90 +496,10 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
         pSection.setKind(LDFileFormat::Ignore);
         return true;
       }
-      InputToExDataMapMap::iterator exDataMapIt =
-          m_InputToExDataMapMap.find(const_cast<Input*>(&pInput));
-      if (exDataMapIt != m_InputToExDataMapMap.end()) {
-        ARMNameToExDataMap* exDataMap = exDataMapIt->second;
-        if (ARMExData* exData = exDataMap->getByExSection(pSection.name())) {
-          LDSection& exIdx = *exData->exIdx();
-          LDSection& relExIdx = *exData->relExIdx();
-          const RegionFragment* exIdxFrag =
-              (const RegionFragment*)checkAndFindRegionFragment(exIdx);
-
-          const llvm::StringRef exIdxRegion = exIdxFrag->getRegion();
-
-          RelocData* relExIdxData = relExIdx.getRelocData();
-          RelocData::iterator relExIdxIt = relExIdxData->begin();
-          RelocData::iterator relExIdxEnd = relExIdxData->end();
-
-          // Find the relocations at the even words and obtain the .ARM.extab
-          // starting offsets.
-          for (FragmentRef::Offset offset = 4, end = exIdxRegion.size();
-               offset < end; offset += 8) {
-            // Forward the reloc iterator until the even word is reached.
-            while (relExIdxIt != relExIdxEnd &&
-                   relExIdxIt->targetRef().offset() < offset) {
-              ++relExIdxIt;
-            }
-
-            // The relocation with smallest offset is not in this .ARM.exidx
-            // entry, ignore this entry.
-            if (relExIdxIt == relExIdxEnd ||
-                relExIdxIt->targetRef().offset() > offset) {
-              continue;
-            }
-
-            // The starting offset of .ARM.extab entry for this .ARM.exidx
-            // entry.
-            FragmentRef::Offset exTabOffset =
-              relExIdxIt->symInfo()->outSymbol()->fragRef()->offset() +
-              relExIdxIt->target();
-
-            ARMExEntry* entry = exData->getEntry(exTabOffset);
-            const llvm::StringRef region = entry->getRegion();
-
-            // Find the emitted .ARM.extab entry.
-            uint32_t checksum = ::crc32(0xFFFFFFFF,
-                                        (const uint8_t*)region.data(),
-                                        region.size());
-
-            CRC32ToEntryMap::iterator entIt = m_EmittedEntry.find(checksum);
-            CRC32ToEntryMap::iterator entEnd = m_EmittedEntry.end();
-
-            while (entIt != entEnd) {
-              if (*entIt->second == *entry) {
-                break;
-              }
-              ++entIt;
-            }
-
-            LDSymbol* dest = NULL;
-            if (entIt != entEnd) {
-              // Reuse the same region fragment.
-              dest = entIt->second->getSymbol();
-            } else {
-              // Create new RegionFragment and LDSymbol.
-              if (!m_pEXTAB->hasSectionData()) {
-                IRBuilder::CreateSectionData(*m_pEXTAB);
-              }
-              if (m_pEXTAB->align() < 4) {
-                m_pEXTAB->setAlign(4);
-              }
-              RegionFragment* frag =
-                  new RegionFragment(entry->getRegion(),
-                                     m_pEXTAB->getSectionData());
-              frag->setOffset(m_pEXTAB->size());
-              m_pEXTAB->setSize(m_pEXTAB->size() + frag->size());
-              dest = createExTabSymbol(pModule, *frag);
-              entry->setRegionFragment(frag);
-              entry->setSymbol(dest);
-              m_EmittedEntry.insert(std::make_pair(checksum, entry));
-            }
-
-            relExIdxIt->target() = 0;
-            relExIdxIt->setSymInfo(dest->resolveInfo());
-          }
-        }
+      if (mergeRewrittenExSection(pModule, pInput, pSection)) {
+        // TODO: mergeRewrittenExSection() should merge the rewritten .ARM.exidx
+        // section in the future, so that we can return on success.  For now,
+        // we still rely on the fall through case to merge .ARM.exidx.
       }
     }
     /** fall through **/
@@ -588,7 +508,108 @@ bool ARMGNULDBackend::mergeSection(Module& pModule,
       builder.MergeSection(pInput, pSection);
       return true;
     }
-  }  // end of switch
+  } // end of switch
+  return true;
+}
+
+/// mergeRewrittenExSection - merge and rewrite the exception section
+bool ARMGNULDBackend::mergeRewrittenExSection(Module& pModule,
+                                              const Input& pInput,
+                                              LDSection& pSection)
+{
+  // Find the exception section map of the given input.
+  InputToExDataMapMap::iterator exDataMapIt =
+      m_InputToExDataMapMap.find(const_cast<Input*>(&pInput));
+  if (exDataMapIt == m_InputToExDataMapMap.end()) {
+    return false;
+  }
+
+  // Find the exception section pair.
+  ARMNameToExDataMap* exDataMap = exDataMapIt->second;
+  ARMExData* exData = exDataMap->getByExSection(pSection.name());
+  if (!exData) {
+    return false;
+  }
+
+  LDSection& exIdx = *exData->exIdx();
+  LDSection& relExIdx = *exData->relExIdx();
+  const RegionFragment* exIdxFrag =
+      (const RegionFragment*)checkAndFindRegionFragment(exIdx);
+
+  const llvm::StringRef exIdxRegion = exIdxFrag->getRegion();
+
+  RelocData* relExIdxData = relExIdx.getRelocData();
+  RelocData::iterator relExIdxIt = relExIdxData->begin();
+  RelocData::iterator relExIdxEnd = relExIdxData->end();
+
+  // Find the relocations at the even words and obtain the .ARM.extab
+  // starting offsets.
+  for (FragmentRef::Offset offset = 4, end = exIdxRegion.size();
+       offset < end; offset += 8) {
+    // Forward the reloc iterator until the even word is reached.
+    while (relExIdxIt != relExIdxEnd &&
+           relExIdxIt->targetRef().offset() < offset) {
+      ++relExIdxIt;
+    }
+
+    // The relocation with smallest offset is not in this .ARM.exidx
+    // entry, ignore this entry.
+    if (relExIdxIt == relExIdxEnd ||
+        relExIdxIt->targetRef().offset() > offset) {
+      continue;
+    }
+
+    // The starting offset of .ARM.extab entry for this .ARM.exidx
+    // entry.
+    FragmentRef::Offset exTabOffset =
+      relExIdxIt->symInfo()->outSymbol()->fragRef()->offset() +
+      relExIdxIt->target();
+
+    ARMExEntry* entry = exData->getEntry(exTabOffset);
+    const llvm::StringRef region = entry->getRegion();
+
+    // Find the emitted .ARM.extab entry.
+    uint32_t checksum = ::crc32(0xFFFFFFFF,
+                                (const uint8_t*)region.data(),
+                                region.size());
+
+    CRC32ToEntryMap::iterator entIt = m_EmittedEntry.find(checksum);
+    CRC32ToEntryMap::iterator entEnd = m_EmittedEntry.end();
+
+    while (entIt != entEnd) {
+      if (*entIt->second == *entry) {
+        break;
+      }
+      ++entIt;
+    }
+
+    LDSymbol* dest = NULL;
+    if (entIt != entEnd) {
+      // Reuse the same region fragment.
+      dest = entIt->second->getSymbol();
+    } else {
+      // Create new RegionFragment and LDSymbol.
+      if (!m_pEXTAB->hasSectionData()) {
+        IRBuilder::CreateSectionData(*m_pEXTAB);
+      }
+      if (m_pEXTAB->align() < 4) {
+        m_pEXTAB->setAlign(4);
+      }
+      RegionFragment* frag =
+          new RegionFragment(entry->getRegion(),
+                             m_pEXTAB->getSectionData());
+      frag->setOffset(m_pEXTAB->size());
+      m_pEXTAB->setSize(m_pEXTAB->size() + frag->size());
+      dest = createExTabSymbol(pModule, *frag);
+      entry->setRegionFragment(frag);
+      entry->setSymbol(dest);
+      m_EmittedEntry.insert(std::make_pair(checksum, entry));
+    }
+
+    relExIdxIt->target() = 0;
+    relExIdxIt->setSymInfo(dest->resolveInfo());
+  }
+
   return true;
 }
 

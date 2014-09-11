@@ -206,7 +206,10 @@ class ARMGNULDBackend : public GNULDBackend {
   /// buildExEntries - build ARMExEntry for ARMExData
   void buildExEntries(ARMExData& pExData);
 
- private:
+  /// mergeRewrittenExSection - merge and rewrite the exception section
+  bool mergeRewrittenExSection(Module& pModule, const Input& pInput,
+                               LDSection& pSection);
+
   LDSymbol* createExTabSymbol(Module& pModule, Fragment& pFragment);
 
  private:
