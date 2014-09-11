@@ -1184,7 +1184,7 @@ void ARMGNULDBackend::checkExDataRewritable(Input& pInput,
       continue;
     }
 
-    if (ResolveInfo::Local != sym->binding() || 0 != fragRef->offset()) {
+    if (ResolveInfo::Local != sym->binding() && 0 != fragRef->offset()) {
       const Fragment* frag = fragRef->frag();
       const LDSection& section = frag->getParent()->getSection();
       llvm::StringRef sectName(section.name());
