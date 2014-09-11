@@ -1167,11 +1167,15 @@ void ARMGNULDBackend::checkExDataRewritable(Input& pInput,
                                       rsEnd = inputCtx->relocSectEnd();
        rsIt != rsEnd; ++rsIt) {
     LDSection* sect = *rsIt;
-    llvm::StringRef sectName(sect->name());
 
+    if (LDFileFormat::Ignore == sect->kind()) {
+      continue;
+    }
+    assert(LDFileFormat::Relocation == sect->kind());
     assert(sect->hasRelocData() && "Reloc section should have RelocData");
     RelocData* relocData = sect->getRelocData();
 
+    llvm::StringRef sectName(sect->name());
     if (sectName.startswith(".rel.ARM.exidx")) {
       scanRelExIdxToCheckRewritable(sectName, *relocData, pExDataMap);
     } else {
