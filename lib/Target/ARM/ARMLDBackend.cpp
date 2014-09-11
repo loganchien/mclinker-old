@@ -587,6 +587,18 @@ bool ARMGNULDBackend::mergeRewrittenExSection(Module& pModule,
     if (entIt != entEnd) {
       // Reuse the same region fragment.
       dest = entIt->second->getSymbol();
+
+      // Erase the relocations.
+      if (LDSection* relExTab = exData->relExTab()) {
+        RelocData* relExTabData = relExTab->getRelocData();
+        Relocation* relocIt = entry->begin();
+        Relocation* relocEnd = entry->end();
+        while (relocIt && relocIt != relocEnd) {
+          Relocation* relocDead = relocIt;
+          relocIt = relocIt->getNextNode();
+          relExTabData->remove(*relocDead);
+        }
+      }
     } else {
       // Create new RegionFragment and LDSymbol.
       if (!m_pEXTAB->hasSectionData()) {
@@ -604,6 +616,15 @@ bool ARMGNULDBackend::mergeRewrittenExSection(Module& pModule,
       entry->setRegionFragment(frag);
       entry->setSymbol(dest);
       m_EmittedEntry.insert(std::make_pair(checksum, entry));
+
+      // Update the relocations.
+      Relocation* relocIt = entry->begin();
+      Relocation* relocEnd = entry->end();
+      while (relocIt && relocIt != relocEnd) {
+        FragmentRef& fixupRef = relocIt->targetRef();
+        fixupRef.assign(*frag, fixupRef.offset() - entry->getInputOffset());
+        relocIt = relocIt->getNextNode();
+      }
     }
 
     relExIdxIt->target() = 0;
