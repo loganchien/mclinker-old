@@ -527,7 +527,7 @@ bool ARMGNULDBackend::mergeRewrittenExSection(Module& pModule,
   // Find the exception section pair.
   ARMNameToExDataMap* exDataMap = exDataMapIt->second;
   ARMExData* exData = exDataMap->getByExSection(pSection.name());
-  if (!exData) {
+  if (!exData || !exData->isRewritable()) {
     return false;
   }
 
