@@ -452,6 +452,10 @@ void ARMGNULDBackend::preMergeSections(Module& pModule)
   buildInputExDataMaps(pModule);
 }
 
+void ARMGNULDBackend::postMergeSections(Module& pModule)
+{
+}
+
 LDSymbol* ARMGNULDBackend::createExTabSymbol(Module& pModule,
                                              Fragment& pFragment)
 {

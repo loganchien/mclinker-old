@@ -67,6 +67,9 @@ class ObjectLinker {
   /// mergeSections - put allinput sections into output sections
   bool mergeSections();
 
+  /// postMergeSections - hook to be executed after merging the input sections
+  void postMergeSections(Module& pModule);
+
   /// addSymbolsToOutput - after all symbols has been resolved, add the symbol
   /// to output
   void addSymbolsToOutput(Module& pModule);

@@ -120,6 +120,10 @@ class TargetLDBackend {
     return true;
   }
 
+  /// postMergeSections - hook to be executed after merging the input sections
+  virtual void postMergeSections(Module& pModule)
+  { }
+
   /// setUpReachedSectionsForGC - set the reference between two sections for
   /// some special target sections. GC will set up the reference for the Regular
   /// and BSS sections. Backends can also set up the reference if need.

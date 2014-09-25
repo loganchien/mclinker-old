@@ -123,6 +123,9 @@ class ARMGNULDBackend : public GNULDBackend {
   /// mergeSection - merge target dependent sections
   bool mergeSection(Module& pModule, const Input& pInput, LDSection& pSection);
 
+  /// postMergeSections - hook to be executed after merging the input sections
+  void postMergeSections(Module& pModule);
+
   /// setUpReachedSectionsForGC - set the reference from section XXX to
   /// .ARM.exidx.XXX to make sure GC correctly handle section exidx
   void setUpReachedSectionsForGC(

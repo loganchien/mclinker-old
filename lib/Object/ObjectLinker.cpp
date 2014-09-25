@@ -434,7 +434,15 @@ bool ObjectLinker::mergeSections() {
     }  // for each output section description
   }
 
+  // Call the hooks after merging the sections.
+  postMergeSections(*m_pModule);
+
   return true;
+}
+
+/// postMergeSections - hook to be executed after merging the input sections
+void ObjectLinker::postMergeSections(Module& pModule) {
+  m_LDBackend.postMergeSections(pModule);
 }
 
 void ObjectLinker::addSymbolToOutput(ResolveInfo& pInfo, Module& pModule) {
