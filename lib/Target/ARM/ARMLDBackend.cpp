@@ -452,8 +452,178 @@ void ARMGNULDBackend::preMergeSections(Module& pModule)
   buildInputExDataMaps(pModule);
 }
 
+static void listRegionFragments(std::vector<RegionFragment*>& pResult,
+                                LDSection& pSection) {
+  if (!pSection.hasSectionData()) {
+    return;
+  }
+
+  SectionData* sectData = pSection.getSectionData();
+  for (SectionData::iterator it = sectData->begin(), end = sectData->end();
+       it != end; ++it) {
+    if (Fragment::Region == it->getKind()) {
+      pResult.push_back(llvm::cast<RegionFragment>(it));
+    }
+  }
+}
+
+class ARMExIdxFragmentData {
+public:
+  typedef std::vector<Relocation*> RelocList;
+  typedef RelocList::iterator iterator;
+  typedef RelocList::const_iterator const_iterator;
+
+private:
+  RelocList m_RelocToText;
+  RelocList m_RelocToExTab;
+
+public:
+  ARMExIdxFragmentData(const RegionFragment& pFragment)
+      : m_RelocToText(pFragment.size() / 8, nullptr),
+        m_RelocToExTab(pFragment.size() / 8, nullptr)
+  {
+    assert(pFragment.size() % 8 == 0 && "unknown .ARM.exidx format");
+  }
+
+  void addRelocation(Relocation& pReloc)
+  {
+    const FragmentRef& targetRef = pReloc.targetRef();
+    FragmentRef::Offset targetOffset = targetRef.offset();
+    assert(targetOffset % 4 == 0);
+
+    size_t index = targetOffset / 8;
+    if (targetOffset % 8 == 0) {  // Is relocation to .text section
+      assert(index < m_RelocToText.size());
+      assert(nullptr == m_RelocToText[index]);
+      m_RelocToText[index] = &pReloc;
+    } else {
+      assert(index < m_RelocToExTab.size());
+      assert(nullptr == m_RelocToExTab[index]);
+      m_RelocToExTab[index] = &pReloc;
+    }
+  }
+
+  iterator text_reloc_begin() { return m_RelocToText.begin(); }
+  iterator text_reloc_end() { return m_RelocToText.end(); }
+  const_iterator text_reloc_begin() const { return m_RelocToText.begin(); }
+  const_iterator text_reloc_end() const { return m_RelocToText.end(); }
+
+  iterator exidx_reloc_begin() { return m_RelocToText.begin(); }
+  iterator exidx_reloc_end() { return m_RelocToText.end(); }
+  const_iterator exidx_reloc_begin() const { return m_RelocToText.begin(); }
+  const_iterator exidx_reloc_end() const { return m_RelocToText.end(); }
+};
+
 void ARMGNULDBackend::postMergeSections(Module& pModule)
 {
+  typedef std::vector<RegionFragment*> FragmentList;
+
+  // List all fragments in .text output section.
+  FragmentList textFragments;
+  if (LDSection* textSection = pModule.getSection(".text")) {
+    listRegionFragments(textFragments, *textSection);
+  }
+
+  std::map<Fragment*, size_t> textFragmentIndexMap;
+  for (size_t i = 0, n = textFragments.size(); i < n; ++i) {
+    textFragmentIndexMap.emplace(textFragments[i], i);
+  }
+
+  // List all fragments in .ARM.exidx output section.
+  FragmentList exidxFragments;
+  listRegionFragments(exidxFragments, *m_pEXIDX);
+
+  std::map<Fragment*, ARMExIdxFragmentData*> exidxDataMap;
+  for (RegionFragment* frag: exidxFragments) {
+    exidxDataMap.emplace(frag, new ARMExIdxFragmentData(*frag));
+  }
+
+  // Scan the relocations in .ARM.exidx.
+  for (Module::obj_iterator input = pModule.obj_begin(),
+                            inputEnd = pModule.obj_end();
+       input != inputEnd; ++input) {
+    LDContext* context = (*input)->context();
+    for (LDContext::sect_iterator rs = context->relocSectBegin(),
+                                  rsEnd = context->relocSectEnd();
+         rs != rsEnd; ++rs) {
+      LDSection* relocSect = *rs;
+      if ((LDFileFormat::Ignore == relocSect->kind()) ||
+          (!relocSect->hasRelocData()) ||
+          (relocSect->getRelocData()->empty())) {
+        continue;
+      }
+
+      LDSection* applySect = relocSect->getLink();
+      if (llvm::ELF::SHT_ARM_EXIDX != applySect->type()) {
+        continue;
+      }
+
+      RelocData* relocData = relocSect->getRelocData();
+      for (RelocData::iterator reloc = relocData->begin(),
+                               relocEnd = relocData->end();
+           reloc != relocEnd; ++reloc) {
+        assert(llvm::ELF::R_ARM_NONE == reloc->type() ||
+               llvm::ELF::R_ARM_PREL31 == reloc->type());
+        if (llvm::ELF::R_ARM_PREL31 != reloc->type()) {
+          continue;
+        }
+
+        FragmentRef& targetRef = reloc->targetRef();
+        ARMExIdxFragmentData* exidxData = exidxDataMap[targetRef.frag()];
+        assert(exidxData != nullptr);
+        exidxData->addRelocation(*reloc);
+      }
+    }
+  }
+
+  // Check that each .ARM.exidx fragment will only associate with one
+  // .text fragment.
+  for (auto entry : exidxDataMap) {
+    ARMExIdxFragmentData* exidxData = entry.second;
+    Fragment* first = nullptr;
+    for (ARMExIdxFragmentData::iterator it = exidxData->text_reloc_begin(),
+                                        end = exidxData->text_reloc_end();
+         it != end; ++it) {
+      Fragment* curr = (*it)->symInfo()->outSymbol()->fragRef()->frag();
+      if (nullptr == first) {
+        first = curr;
+      } else {
+        assert(first == curr && "More than one destination text fragment");
+      }
+    }
+  }
+
+  // Check that .ARM.exidx fragments is sorted by the .text fragments.
+  size_t lastTextFragmentIndex = 0;
+  for (auto exidxFragment : exidxFragments) {
+    ARMExIdxFragmentData* exidxData = exidxDataMap[exidxFragment];
+    if (exidxData->text_reloc_begin() == exidxData->text_reloc_end()) {
+      continue;
+    }
+    Relocation* reloc = *exidxData->text_reloc_begin();
+    Fragment* dest = reloc->symInfo()->outSymbol()->fragRef()->frag();
+    size_t currTextFragmentIndex = textFragmentIndexMap[dest];
+    if (lastTextFragmentIndex > currTextFragmentIndex) {
+      llvm::errs() << "error: bad .text and .ARM.exidx ordering:"
+                   << " last=" << lastTextFragmentIndex
+                   << " curr=" << currTextFragmentIndex
+                   << "\n";
+      exit(1);
+    }
+    if (lastTextFragmentIndex == currTextFragmentIndex) {
+      continue;
+    }
+    for (size_t i = lastTextFragmentIndex; i < currTextFragmentIndex; ++i) {
+      fprintf(stderr, "DEBUG: insert cantunwind for %p before %p\n",
+              textFragments[i], exidxFragment);
+    }
+    lastTextFragmentIndex = textFragmentIndexMap[dest];
+  }
+
+  // Release ARMExIdxFragmentData.
+  for (auto& entry : exidxDataMap) {
+    delete entry.second;
+  }
 }
 
 LDSymbol* ARMGNULDBackend::createExTabSymbol(Module& pModule,
