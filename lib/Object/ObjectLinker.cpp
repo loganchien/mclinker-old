@@ -332,6 +332,9 @@ bool ObjectLinker::mergeSections() {
     }  // for each output section description
   }
 
+  // run the target-dependent hooks before merging sections
+  m_LDBackend.preMergeSections(*m_pModule);
+
   ObjectBuilder builder(*m_pModule);
   Module::obj_iterator obj, objEnd = m_pModule->obj_end();
   for (obj = m_pModule->obj_begin(); obj != objEnd; ++obj) {
@@ -429,6 +432,9 @@ bool ObjectLinker::mergeSections() {
       }
     }  // for each output section description
   }
+
+  // run the target-dependent hooks after merging sections
+  m_LDBackend.postMergeSections(*m_pModule);
 
   return true;
 }
